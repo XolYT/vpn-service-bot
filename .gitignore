@@ -1,0 +1,4 @@
+.env
+vpn_bot.sqlite3
+__pycache__/
+.venv/

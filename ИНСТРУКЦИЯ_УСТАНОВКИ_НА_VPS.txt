@@ -1,0 +1,254 @@
+VPN Service Bot — установка на Linux VPS и запуск через GitHub
+===============================================================
+
+Эта инструкция рассчитана на Ubuntu 22.04/24.04 или Debian 12. Бот работает
+через long polling, поэтому отдельный домен, HTTPS и открытие входящих портов
+для самого бота не требуются. Серверу нужен исходящий доступ к api.telegram.org.
+
+ВАЖНО О БЕЗОПАСНОСТИ
+---------------------
+* Никогда не добавляйте в GitHub файл .env, BOT_TOKEN или vpn_bot.sqlite3.
+* Репозиторий сделайте приватным.
+* В базе vpn_bot.sqlite3 хранятся подписки, заказы, промокоды и отметки о
+  пробном периоде. Её нужно резервно копировать отдельно.
+* Для 3x-ui не открывайте панель в интернет без защиты. Бот и панель лучше
+  запускать раздельно.
+
+ЧАСТЬ 1. ПОДГОТОВКА РЕПОЗИТОРИЯ НА СВОЁМ КОМПЬЮТЕРЕ
+--------------------------------------------------
+1. Установите Git for Windows: https://git-scm.com/download/win
+   При установке можно оставить параметры по умолчанию.
+
+2. Создайте приватный репозиторий на GitHub:
+   - войдите на https://github.com;
+   - нажмите + в правом верхнем углу -> New repository;
+   - укажите имя, например vpn-service-bot;
+   - выберите Private;
+   - НЕ ставьте галочки Add a README, .gitignore или license: эти файлы уже
+     есть в проекте;
+   - нажмите Create repository.
+
+3. Откройте PowerShell в папке проекта и выполните команды. Путь с пробелом
+   обязательно заключён в кавычки:
+
+   cd "C:\Users\PC\Desktop\Vpn сервис"
+   git init
+   git branch -M main
+   git add bot.py requirements.txt README.md .gitignore .env.example *.md *.txt
+   git status
+   git commit -m "Первый релиз VPN-бота"
+   git remote add origin https://github.com/ВАШ_ЛОГИН/vpn-service-bot.git
+   git push -u origin main
+
+   Замените ВАШ_ЛОГИН и vpn-service-bot на логин GitHub и имя созданного
+   репозитория. GitHub может открыть окно браузера для входа. Авторизуйтесь
+   в нём и подтвердите доступ.
+
+4. До команды git add обязательно проверьте вывод git status. В списке НЕ
+   должны быть .env, vpn_bot.sqlite3, .venv или __pycache__. Их исключает
+   имеющийся файл .gitignore.
+
+5. Все следующие обновления кода с компьютера публикуются так:
+
+   cd "C:\Users\PC\Desktop\Vpn сервис"
+   git add bot.py requirements.txt README.md .gitignore
+   git commit -m "Краткое описание изменения"
+   git push
+
+   Не используйте git add . вслепую, если не проверили git status.
+
+ЧАСТЬ 2. ПЕРВАЯ НАСТРОЙКА VPS
+------------------------------
+1. Подключитесь к VPS по SSH от имени пользователя с правами sudo:
+
+   ssh root@IP_АДРЕС_СЕРВЕРА
+
+   или:
+
+   ssh ИМЯ_ПОЛЬЗОВАТЕЛЯ@IP_АДРЕС_СЕРВЕРА
+
+2. Обновите систему и установите нужные пакеты:
+
+   sudo apt update
+   sudo apt upgrade -y
+   sudo apt install -y git python3 python3-venv
+
+3. Создайте отдельного системного пользователя и папку проекта:
+
+   sudo adduser --system --group --home /home/vpn-bot vpn-bot
+   sudo mkdir -p /opt/vpn-bot
+   sudo chown vpn-bot:vpn-bot /opt/vpn-bot
+
+ЧАСТЬ 3. ДОСТУП VPS К ПРИВАТНОМУ РЕПОЗИТОРИЮ
+--------------------------------------------
+Для сервера безопаснее использовать deploy key — это отдельный SSH-ключ с
+доступом только на чтение к одному репозиторию.
+
+1. На VPS создайте ключ от имени vpn-bot:
+
+   sudo -u vpn-bot mkdir -p /home/vpn-bot/.ssh
+   sudo -u vpn-bot ssh-keygen -t ed25519 -f /home/vpn-bot/.ssh/github_deploy -C "vpn-bot VPS deploy key"
+
+   Когда будет предложен пароль (passphrase), оставьте его пустым: systemd
+   не сможет интерактивно ввести пароль. Приватный ключ никому не отправляйте.
+
+2. Покажите публичную часть ключа и скопируйте всю строку:
+
+   sudo -u vpn-bot cat /home/vpn-bot/.ssh/github_deploy.pub
+
+3. В браузере откройте репозиторий GitHub -> Settings -> Deploy keys ->
+   Add deploy key. Назовите его, например, VPS production. Вставьте
+   скопированную строку в поле Key. НЕ включайте Allow write access.
+   Сохраните ключ.
+
+4. Настройте SSH для этого ключа на VPS:
+
+   sudo -u vpn-bot nano /home/vpn-bot/.ssh/config
+
+   Вставьте:
+
+   Host github.com
+       HostName github.com
+       User git
+       IdentityFile /home/vpn-bot/.ssh/github_deploy
+       IdentitiesOnly yes
+
+   Сохраните файл (Ctrl+O, Enter), выйдите (Ctrl+X), затем выполните:
+
+   sudo chown vpn-bot:vpn-bot /home/vpn-bot/.ssh/config
+   sudo chmod 600 /home/vpn-bot/.ssh/config
+   sudo -u vpn-bot ssh -T git@github.com
+
+   При первом подключении подтвердите fingerprint словом yes. Успешный тест
+   обычно сообщает, что аутентификация прошла, но shell-доступ GitHub не даёт.
+
+ЧАСТЬ 4. ЗАГРУЗКА ПРОЕКТА И НАСТРОЙКИ
+-------------------------------------
+1. Клонируйте репозиторий в созданную папку:
+
+   sudo -u vpn-bot git clone git@github.com:ВАШ_ЛОГИН/vpn-service-bot.git /opt/vpn-bot
+
+   Если папка /opt/vpn-bot уже содержит файлы, используйте пустую папку или
+   удалите только созданный пустой каталог и повторите клонирование.
+
+2. Создайте виртуальное окружение и установите зависимости:
+
+   sudo -u vpn-bot python3 -m venv /opt/vpn-bot/.venv
+   sudo -u vpn-bot /opt/vpn-bot/.venv/bin/python -m pip install --upgrade pip
+   sudo -u vpn-bot /opt/vpn-bot/.venv/bin/pip install -r /opt/vpn-bot/requirements.txt
+
+3. Создайте закрытый файл настроек:
+
+   sudo -u vpn-bot nano /opt/vpn-bot/.env
+
+   Вставьте свои значения:
+
+   BOT_TOKEN=полный_токен_от_BotFather
+   ADMIN_IDS=ваш_числовой_Telegram_ID
+   DATABASE_PATH=/opt/vpn-bot/vpn_bot.sqlite3
+
+   Для нескольких администраторов:
+
+   ADMIN_IDS=123456789,987654321
+
+   Сохраните файл и ограничьте доступ:
+
+   sudo chmod 600 /opt/vpn-bot/.env
+   sudo chown vpn-bot:vpn-bot /opt/vpn-bot/.env
+
+4. Если переносите уже работающего бота, перенесите базу со своего компьютера
+   в /opt/vpn-bot/vpn_bot.sqlite3. Перед копированием остановите бота на
+   прежнем хосте, иначе база может быть скопирована в момент записи.
+
+   Пример с Windows PowerShell:
+
+   scp "C:\Users\PC\Desktop\Vpn сервис\vpn_bot.sqlite3" root@IP_СЕРВЕРА:/tmp/vpn_bot.sqlite3
+
+   Затем на VPS:
+
+   sudo mv /tmp/vpn_bot.sqlite3 /opt/vpn-bot/vpn_bot.sqlite3
+   sudo chown vpn-bot:vpn-bot /opt/vpn-bot/vpn_bot.sqlite3
+   sudo chmod 600 /opt/vpn-bot/vpn_bot.sqlite3
+
+   Если базы нет, бот создаст новую автоматически при первом запуске.
+
+ЧАСТЬ 5. ПОСТОЯННЫЙ ЗАПУСК ЧЕРЕЗ SYSTEMD
+-----------------------------------------
+1. Создайте файл сервиса:
+
+   sudo nano /etc/systemd/system/vpn-bot.service
+
+2. Вставьте точное содержимое:
+
+   [Unit]
+   Description=VPN Service Telegram Bot
+   Wants=network-online.target
+   After=network-online.target
+
+   [Service]
+   Type=simple
+   User=vpn-bot
+   Group=vpn-bot
+   WorkingDirectory=/opt/vpn-bot
+   ExecStart=/opt/vpn-bot/.venv/bin/python /opt/vpn-bot/bot.py
+   Restart=always
+   RestartSec=5
+   Environment=PYTHONUNBUFFERED=1
+
+   [Install]
+   WantedBy=multi-user.target
+
+3. Включите и сразу запустите бота:
+
+   sudo systemctl daemon-reload
+   sudo systemctl enable --now vpn-bot
+   sudo systemctl status vpn-bot
+
+   В status должна быть строка Active: active (running).
+
+4. Смотрите журналы в реальном времени:
+
+   sudo journalctl -u vpn-bot -f
+
+   Для выхода из просмотра нажмите Ctrl+C.
+
+5. Проверьте бота в Telegram: отправьте /start, а с администраторского
+   аккаунта откройте админ-панель. Не запускайте второй экземпляр этого же
+   бота на компьютере: Telegram вернёт ошибку Conflict для двух polling-процессов.
+
+ЧАСТЬ 6. ОБНОВЛЕНИЕ БОТА ИЗ GITHUB
+----------------------------------
+1. Сначала отправьте изменения с компьютера в GitHub (git add, git commit,
+   git push из части 1).
+
+2. На VPS загрузите код, обновите пакеты при изменении requirements.txt и
+   перезапустите сервис:
+
+   sudo -u vpn-bot git -C /opt/vpn-bot pull --ff-only
+   sudo -u vpn-bot /opt/vpn-bot/.venv/bin/pip install -r /opt/vpn-bot/requirements.txt
+   sudo systemctl restart vpn-bot
+   sudo systemctl status vpn-bot
+
+   Файл .env и база vpn_bot.sqlite3 не затрагиваются: они не находятся в Git.
+
+ЧАСТЬ 7. РЕЗЕРВНАЯ КОПИЯ БАЗЫ
+------------------------------
+Сделайте каталог для резервных копий и копируйте базу после остановки бота:
+
+   sudo mkdir -p /var/backups/vpn-bot
+   sudo systemctl stop vpn-bot
+   sudo cp /opt/vpn-bot/vpn_bot.sqlite3 /var/backups/vpn-bot/vpn_bot-$(date +%F-%H%M%S).sqlite3
+   sudo systemctl start vpn-bot
+
+Копии периодически скачивайте с VPS в безопасное место. Не храните единственную
+копию базы на том же сервере.
+
+ЧАСТЫЕ ПРОБЛЕМЫ
+---------------
+* Бот не отвечает: sudo journalctl -u vpn-bot -n 100 --no-pager
+* Ошибка BOT_TOKEN/ADMIN_IDS: проверьте /opt/vpn-bot/.env и перезапустите:
+  sudo systemctl restart vpn-bot
+* Ошибка Conflict: остановите старый экземпляр бота на Windows или другом VPS.
+* Ошибка доступа к GitHub: проверьте deploy key в настройках нужного репозитория
+  и права на /home/vpn-bot/.ssh.
+* После изменения .env всегда выполните sudo systemctl restart vpn-bot.
