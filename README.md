@@ -24,9 +24,9 @@
 
 3. Если не запустился скрипт во 2 строчке:
 Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass
-И снова запустить скрипт 
+4. И снова запустить скрипт 
 5. Скопируйте `.env.example` в `.env`, вставьте токен BotFather и свой числовой Telegram ID.
-4. Запустите: `python bot.py`.
+6. Запустите: `python bot.py`.
 
 Узнать свой ID можно через бота вроде `@userinfobot`. Панель открывается командой `/admin` только для ID из `ADMIN_IDS`.
 
